@@ -17,7 +17,7 @@ def run_scraper(url):
         return result
 
 if __name__ == "__main__":
-    test_url = "https://www.trendyol.com/p/example-product-123"
+    test_url = "https://www.trendyol.com/tonny-black/unisex-beyaz-siyah-termo-taban-yani-seritli-bagcikli-spor-ayakkabi-p-879885114?boutiqueId=61&merchantId=106292"
     
     print("Starting the scraping process...")
     data = run_scraper(test_url)
