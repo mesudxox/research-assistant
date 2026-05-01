@@ -1,8 +1,12 @@
 from core.base_plugin import BasePlugin
 from selenium.webdriver.common.by import By
+from selenium import webdriver
+
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 import time
+import uuid
+from datetime import datetime
 
 class TrendyolPlugin(BasePlugin):
     
@@ -25,7 +29,12 @@ class TrendyolPlugin(BasePlugin):
             price_element = wait.until(EC.presence_of_element_located((By.XPATH, "//*[@id='envoy']/div/div[3]/div/div/span")))
             price = price_element.get_attribute('innerText').strip()
 
-            return {
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            screenshot_name = f"price_{timestamp}_{uuid.uuid4().hex[:6]}.png"
+            screenshot_path = f"utils/{screenshot_name}"
+            self.driver.save_screenshot(screenshot_path)
+
+            return { 
                 "platform": "Trendyol",
                 "title": title.strip(),
                 "price": price,
