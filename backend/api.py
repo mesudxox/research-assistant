@@ -9,28 +9,38 @@ import utils.model as models
 from utils.database import SessionLocal, engine, get_db
 from core.engine import ScraperEngine
 from plugins.trendyol import TrendyolPlugin
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 
-# Initialize database tables
+
 models.Base.metadata.create_all(bind=engine)
 
 app = FastAPI(title="Research Assistant API")
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:5173"], 
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+app.mount("/static", StaticFiles(directory="utils/files"), name="static")
 
-@app.post("/scrape")
-def scrape_product(url: str, db: Session = Depends(get_db)):
-    if "trendyol.com" not in url:
-        raise HTTPException(status_code=400, detail="Only Trendyol links are supported.")
+
+@app.post("/scrape/{platform}")
+def scrape_product(platform: str, url: str, db: Session = Depends(get_db)):
+    if platform == "trendyol" and "trendyol.com" not in url:
+        raise HTTPException(status_code=400, detail="URL does not match selected platform.")
 
     try:
-        # 1. Start Engine
         with ScraperEngine(url) as driver:
-            # Small delay to allow Javascript to render on the Toshiba
-            time.sleep(2) 
+            if platform == "trendyol":
+                plugin = TrendyolPlugin(driver)
+           
             
-            plugin = TrendyolPlugin(driver)
             result = plugin.scrape()
+            # ... rest of your saving logic ...
             
             if result.get("status") == "success":
-                # 2. Data Cleaning
                 raw_price = str(result.get('price', '0'))
                 clean_price = raw_price.replace('TL', '').replace(' ', '').replace('.', '').replace(',', '.')
                 
@@ -39,7 +49,6 @@ def scrape_product(url: str, db: Session = Depends(get_db)):
                 except ValueError:
                     final_price = 0.0
 
-                # 3. Screenshot Logic
                 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
                 SCREENSHOT_DIR = os.path.join(BASE_DIR, "utils", "files")
                 os.makedirs(SCREENSHOT_DIR, exist_ok=True)
@@ -48,10 +57,8 @@ def scrape_product(url: str, db: Session = Depends(get_db)):
                 screenshot_name = f"price_{timestamp}_{uuid.uuid4().hex[:6]}.png"
                 screenshot_path = os.path.join(SCREENSHOT_DIR, screenshot_name)
                 
-                # Take screenshot
                 driver.save_screenshot(screenshot_path)
 
-                # 4. Database Save
                 new_entry = models.PriceHistory(
                     product_name=result['title'],
                     product_url=url,
@@ -74,14 +81,26 @@ def scrape_product(url: str, db: Session = Depends(get_db)):
                     }
                 }
             else:
-                # If the plugin failed, it usually means Trendyol blocked the request or changed CSS
                 raise HTTPException(status_code=500, detail=f"Plugin Error: {result.get('message')}")
                 
     except Exception as e:
         if 'db' in locals(): db.rollback()
         print(f"Detailed Error: {e}") # Look at your terminal for this!
         raise HTTPException(status_code=500, detail=str(e))
-
+@app.get("/history")
+def get_history(db: Session = Depends(get_db)):
+    # Fetch the last 10 price records
+    history = db.query(models.PriceHistory).order_by(models.PriceHistory.timestamp.desc()).limit(10).all()
+    return [
+        {
+            "id": item.id,
+            "title": item.product_name,
+            "price": item.price,
+            "time": item.timestamp.strftime("%H:%M"),
+            "screenshot": os.path.basename(item.screenshot_path),
+            "trend": "neutral" # You can calculate this by comparing to the previous price
+        } for item in history
+    ]
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)
