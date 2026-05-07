@@ -8,8 +8,18 @@ class PriceHistory(Base):
     __tablename__ = "price_history"
 
     id = Column(Integer, primary_key=True, index=True)
+    
+   
+    user_id = Column(String, index=True) 
+    
     product_name = Column(String)
     product_url = Column(String, index=True)
+    platform = Column(String) 
+    category = Column(String, default="General") 
+    
     price = Column(Float)
-    screenshot_path = Column(String)
+    target_price = Column(Float, nullable=True) 
+    initial_price = Column(Float) 
+    
+    screenshot_path = Column(String, nullable=True)
     timestamp = Column(DateTime, default=datetime.utcnow)
