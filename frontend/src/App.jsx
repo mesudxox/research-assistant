@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import logo from './assets/xox-logo.png'; 
 import { Flame, Bell, Trash2, CheckCircle } from 'lucide-react'; 
-import xoxApi from './api';
+import xoxApi from './assets/api';
 
 const MOCK_HISTORY = [
   { 
@@ -45,7 +45,6 @@ function App() {
   const [tempTarget, setTempTarget] = useState("");
   const [filterHot, setFilterHot] = useState(false);
   
-  // --- NOTIFICATION STATES ---
   const [showNotifPanel, setShowNotifPanel] = useState(false);
   const [notifications, setNotifications] = useState([
     { id: 101, text: "Welcome to XOX Tracker Premium.", type: "system", time: "Now", read: false },
@@ -55,18 +54,28 @@ function App() {
   const [compLeft, setCompLeft] = useState(MOCK_HISTORY[0].id);
   const [compRight, setCompRight] = useState(MOCK_HISTORY[1].id);
 
-  useEffect(() => {
+ useEffect(() => {
   const loadDatabaseContent = async () => {
-    const data = await xoxApi.fetchHistory();
-    if (data && data.length > 0) {
-      setHistory(data);
-      setSelectedId(data[0].id);
+    try {
+      const data = await xoxApi.fetchHistory();
+      if (data && data.length > 0) {
+        const formattedData = data.map(item => ({
+          ...item,
+          
+          history: item.history || [item.price], 
+          dates: item.dates || [new Date(item.created_at || Date.now()).toLocaleDateString('en-US', {month: 'short', day: 'numeric'})]
+        }));
+        
+        setHistory(formattedData);
+        setSelectedId(formattedData[0].id);
+      }
+    } catch (err) {
+      console.error("Failed to load history:", err);
     }
   };
   loadDatabaseContent();
 }, []);
 
-  // --- NOTIFICATION LOGIC (BACKEND COMPATIBLE) ---
   const addNotification = (text, type = "alert") => {
     const newNotif = {
       id: Date.now(),
@@ -81,72 +90,99 @@ function App() {
   const markAllAsRead = () => {
     setNotifications(prev => prev.map(n => ({ ...n, read: true })));
   };
-
-  const handleUpdateTarget = async (id) => {
+const handleUpdateTarget = async (id) => {
   const newTarget = parseFloat(tempTarget);
-  if (isNaN(newTarget)) return;
+  if (isNaN(newTarget) || newTarget <= 0) {
+    setEditingId(null);
+    return;
+  }
 
   try {
-    // Save to SQLite
     await xoxApi.updateTarget(id, newTarget);
     
-    // Update local UI
-    setHistory(prev => prev.map(item => item.id === id ? { ...item, targetPrice: newTarget } : item));
+    setHistory(prev => prev.map(item => 
+      item.id === id ? { ...item, target_price: newTarget } : item
+    ));
+    
     setEditingId(null);
     setTempTarget("");
-    addNotification("Target price synced to database", "system");
+    addNotification("Target synced to database", "system");
   } catch (err) {
-    addNotification("Failed to save target", "alert");
+    console.error("Target Update Error:", err);
+    addNotification("Database Sync Failed", "alert");
   }
 };
-// REWRITE WITH THIS
 const handleScrape = async (e) => {
   e.preventDefault();
   if (!url) return;
-  
   setLoading(true);
+
   try {
-    // 1. Call your FastAPI through the bridge
-    const newItem = await xoxApi.scrapeProduct(url, selectedSite);
+    const response = await xoxApi.scrapeProduct(url, selectedSite);
     
-    // 2. Prepare the data for your Chart
-    const formattedItem = {
-      ...newItem,
-      history: [newItem.price], // Backend gives current price
-      dates: [new Date().toLocaleDateString('en-US', {month: 'short', day: 'numeric'})]
-    };
-    
-    // 3. Update the UI state
-    setHistory(prev => [formattedItem, ...prev]);
-    setSelectedId(newItem.id);
-    setView('dashboard');
-    addNotification(`Tracked: ${newItem.title}`, "system");
+    if (response && response.data) {
+      await new Promise(r => setTimeout(r, 400));
+
+      const freshHistory = await xoxApi.fetchHistory();
+      
+      if (freshHistory && Array.isArray(freshHistory)) {
+        
+        const synchronizedData = freshHistory.map(item => ({ ...item }));
+        
+        setHistory(synchronizedData);
+
+        const justScraped = synchronizedData.find(item => 
+          item.id === response.data.id || item.title === response.data.title
+        );
+
+        if (justScraped) {
+          setSelectedId(justScraped.id);
+        }
+      }
+      
+      setView('dashboard');
+      addNotification(`Analysis Synchronized`, "system");
+    }
   } catch (err) {
-    addNotification("Backend Error: " + err.message, "alert");
+    console.error("Sync Error:", err);
+    addNotification("Sync Failed", "alert");
   } finally {
     setLoading(false);
-    setUrl('');
   }
 };
+ const calculateProbability = (item) => {
+  if (!item || !item.price || !item.target_price) return 0;
 
-  const calculateProbability = (item) => {
-    const diff = item.price - item.target_price;
-    if (diff <= 0) return 5;
-    const range = item.initialPrice - item.target_price;
-    return Math.round(Math.min(Math.max(((diff / range) * 100), 10), 95));
-  };
+  const currentPrice = parseFloat(item.price);
+  const target = parseFloat(item.target_price);
+  
+  if (currentPrice <= target) return 99; 
 
-  const displayedHistory = filterHot 
-    ? history.filter(item => (item.price - item.target_price) <= (item.target_price * 0.1)) 
-    : history;
+  const diff = currentPrice - target;
+  const progress = Math.max(0, 100 - (diff / target) * 100);
+  
+  return Math.round(Math.min(progress, 95));
+};
+const displayedHistory = Array.isArray(history) 
+    ? (filterHot 
+        ? history.filter(item => (item.price - (item.target_price || 0)) <= ((item.target_price || 0) * 0.1)) 
+        : history)
+    : [];
 
-  const active = history.find(p => p.id === selectedId) || history[0];
-  const leftItem = history.find(p => p.id === compLeft) || history[0];
-  const rightItem = history.find(p => p.id === compRight) || history[1];
+const active = (history && history.length > 0) 
+    ? (history.find(p => p.id === selectedId) || history[0]) 
+    : null;
+const leftItem = history?.find(p => p.id === compLeft) || history?.[0] || null;
+const rightItem = history?.find(p => p.id === compRight) || history?.[1] || history?.[0] || null;
 
-  const maxPrice = Math.max(...active.history, active.targetPrice) * 1.1;
-  const minPrice = Math.min(...active.history, active.targetPrice) * 0.9;
-  const range = maxPrice - minPrice;
+const activeHistory = active?.history || [];
+const activeTarget = active?.target_price || 0;
+
+const allPoints = [...activeHistory, activeTarget].filter(p => typeof p === 'number' && p > 0);
+
+const minPrice = allPoints.length ? Math.min(...allPoints) * 0.9 : 0;
+const maxPrice = allPoints.length ? Math.max(...allPoints) * 1.1 : 100;
+const range = (maxPrice - minPrice) || 1;
 
   return (
     <div className="min-h-screen bg-[#0a0b0c] flex flex-col items-center p-12 font-sans text-white selection:bg-cyan-500/30">
@@ -171,7 +207,6 @@ const handleScrape = async (e) => {
           </nav>
 
           <div className="flex items-center gap-4 relative">
-            {/* HOT BUTTON - DASHBOARD ONLY */}
             {view === 'dashboard' && (
               <button 
                 onClick={() => setFilterHot(!filterHot)}
@@ -183,7 +218,6 @@ const handleScrape = async (e) => {
               </button>
             )}
 
-            {/* NOTIFICATION BUTTON */}
             <div className="relative">
               <button 
                 onClick={() => { setShowNotifPanel(!showNotifPanel); if(!showNotifPanel) markAllAsRead(); }}
@@ -197,7 +231,6 @@ const handleScrape = async (e) => {
                 )}
               </button>
 
-              {/* NOTIFICATION PANEL */}
               {showNotifPanel && (
                 <div className="absolute top-16 right-0 w-80 bg-[#111214] border border-white/10 rounded-[32px] shadow-2xl z-[100] p-6 animate-in slide-in-from-top-4 overflow-hidden">
                   <div className="flex justify-between items-center mb-6">
@@ -265,24 +298,64 @@ const handleScrape = async (e) => {
               <div className="flex justify-between items-start mb-10 relative z-10">
                 <div>
                   <h3 className="text-[10px] font-bold text-gray-500 tracking-widest uppercase mb-1">Live Trend Analysis</h3>
-                  <h2 className="text-2xl font-black text-white uppercase tracking-tighter max-w-md truncate">{active.title}</h2>
+                  <h2 className="text-2xl font-black text-white uppercase tracking-tighter max-w-md truncate">{active?.title || "No Product Selected"}</h2>
                 </div>
                 <div className="text-right">
                   <span className="text-[10px] font-bold text-rose-500 block mb-1 uppercase tracking-tighter">Target Price</span>
-                  <span className="text-3xl font-black text-rose-500">{active.targetPrice} TL</span>
+                  <span className="text-3xl font-black text-rose-500">{active?.target_price || 0} TL</span>
                 </div>
               </div>
               <div className="flex-1 relative flex items-end justify-between px-6 pb-12 z-10">
-                <div className="absolute left-0 right-0 border-t-2 border-dashed border-rose-500/30 z-0 transition-all duration-500" style={{ bottom: `${((active.targetPrice - minPrice) / range) * 100 + 10}%` }}></div>
-                {active.history.map((price, i) => (
-                  <div key={i} className="flex-1 group flex flex-col items-center justify-end h-full relative">
-                    <div className="mb-2 z-30">
-                      <div className="bg-cyan-500/10 border border-cyan-500/20 text-cyan-400 text-[8px] font-black px-2 py-1 rounded-md shadow-lg whitespace-nowrap">{price} TL</div>
-                    </div>
-                    <div style={{ height: `${((price - minPrice) / range) * 75 + 5}%` }} className="w-10 bg-gradient-to-t from-cyan-600/40 to-cyan-400 border-t border-cyan-300/50 rounded-t-xl group-hover:from-cyan-400 cursor-pointer transition-all duration-1000"></div>
-                    <span className="text-[7px] mt-4 text-gray-500 font-bold uppercase">{active.dates[i]}</span>
-                  </div>
-                ))}
+                <div className="absolute left-0 right-0 border-t-2 border-dashed border-rose-500/30 z-0 transition-all duration-500" style={{ bottom: `${((active?.target_price - minPrice) / range) * 100 + 10}%` }}></div>
+{active ? (
+  (() => {
+    const historyData = active?.history || [];
+    const target = active?.target_price || 0;
+    const allPoints = [...historyData, target].filter(p => typeof p === 'number' && p > 0);
+
+    if (allPoints.length === 0) {
+      return <div className="h-full flex items-center justify-center text-gray-600 text-[10px] uppercase font-black">Waiting for Data...</div>;
+    }
+
+    const minVal = Math.min(...allPoints) * 0.95; 
+    const maxVal = Math.max(...allPoints) * 1.05; 
+    const priceRange = maxVal - minVal || 1;
+
+    return historyData.map((price, i) => {
+      const barHeight = ((price - minVal) / priceRange) * 100;
+
+return (
+  <div key={`${i}-${price}-${active.id}`} className="flex flex-col items-center gap-2 group/bar h-full justify-end relative">
+          {/* PRICE TOOLTIP (Shows on Hover) */}
+          <div className="absolute -top-10 left-1/2 -translate-x-1/2 bg-white text-black text-[10px] font-black px-2 py-1 rounded-md opacity-0 group-hover/bar:opacity-100 transition-all duration-300 pointer-events-none z-50 whitespace-nowrap shadow-[0_0_20px_rgba(255,255,255,0.4)] translate-y-2 group-hover/bar:translate-y-0">
+            {price} TL
+          </div>
+
+          <div 
+            className="w-8 rounded-t-md transition-all duration-300 cursor-crosshair
+                       bg-gradient-to-t from-cyan-500/40 to-cyan-300
+                       border-x border-t border-cyan-300/50
+                       shadow-[0_0_15px_rgba(34,211,238,0.1)]
+                       group-hover/bar:to-white group-hover/bar:shadow-[0_0_25px_rgba(34,211,238,0.5)] 
+                       group-hover/bar:-translate-y-1"
+            style={{ height: `${Math.max(barHeight, 15)}%` }}
+          />
+
+          <span className="text-[8px] text-gray-400 uppercase font-bold tracking-tighter group-hover/bar:text-white transition-colors">
+            {active?.dates?.[i] || 'Now'}
+          </span>
+        </div>
+      );
+    });
+  })()
+) : (
+  <div className="flex flex-col items-center justify-center h-full w-full gap-4">
+    <div className="w-12 h-12 rounded-full border-2 border-dashed border-gray-800 animate-spin" />
+    <p className="text-gray-700 font-black uppercase text-[10px] tracking-[0.3em]">
+      Initialize Engine to View Analysis
+    </p>
+  </div>
+)}
               </div>
             </section>
 
@@ -301,7 +374,6 @@ const handleScrape = async (e) => {
       <span className="text-sm font-black text-white">{item.price} TL</span>
     </div>
 
-    {/* Platform Tag */}
     <div className="flex gap-2 mb-2">
       <span className="text-[7px] font-black px-2 py-0.5 rounded bg-cyan-500/10 text-cyan-500 border border-cyan-500/20 uppercase tracking-tighter">
         {item.platform || "TRACKED"}
@@ -311,7 +383,6 @@ const handleScrape = async (e) => {
     {selectedId === item.id && (
       <div className="pt-4 border-t border-white/5 space-y-4 animate-in slide-in-from-top-2">
         
-        {/* DYNAMIC IMAGE FROM FASTAPI */}
         <div className="aspect-video bg-black/60 rounded-2xl border border-white/10 flex flex-col items-center justify-center overflow-hidden relative">
           {item.screenshot ? (
             <img 
@@ -319,8 +390,8 @@ const handleScrape = async (e) => {
               alt={item.title} 
               className="w-full h-full object-cover transition-opacity duration-300"
               onError={(e) => {
-                e.target.style.display = 'none'; // Hide broken image
-                e.target.nextSibling.style.display = 'block'; // Show text instead
+                e.target.style.display = 'none'; 
+                e.target.nextSibling.style.display = 'block'; 
               }}
             />
           ) : null}
@@ -328,7 +399,6 @@ const handleScrape = async (e) => {
           {!item.screenshot && <span className="text-[10px] font-black uppercase text-gray-700">Processing...</span>}
         </div>
 
-        {/* TARGET PRICE DISPLAY/INPUT */}
         <div className="flex justify-between items-center bg-black/40 p-3 rounded-2xl border border-white/5">
           <span className="text-[8px] font-black text-gray-500 uppercase">Target</span>
           {editingId === item.id ? (
@@ -345,7 +415,6 @@ const handleScrape = async (e) => {
           )}
         </div>
 
-        {/* ACTION BUTTONS */}
         <div className="grid grid-cols-2 gap-2">
           <button 
             onClick={(e) => { 
@@ -373,7 +442,6 @@ const handleScrape = async (e) => {
           </div>
         )}
 
-        {/* --- OTHER VIEWS --- */}
         {view === 'history' && (
            <section className="animate-in slide-in-from-bottom-4 pb-20">
             <h2 className="text-4xl font-black uppercase italic mb-8">Full <span className="text-cyan-400">Inventory</span></h2>
@@ -414,7 +482,7 @@ const handleScrape = async (e) => {
                   <select value={idx === 0 ? compLeft : compRight} onChange={(e) => idx === 0 ? setCompLeft(Number(e.target.value)) : setCompRight(Number(e.target.value))} className="w-full bg-black/40 border border-white/10 rounded-2xl p-4 text-xs font-bold outline-none text-cyan-400 mb-10">
                     {history.map(h => <option key={h.id} value={h.id}>{h.title}</option>)}
                   </select>
-                  <div className="text-6xl font-black mb-10">{item.price} <span className="text-lg text-gray-500 uppercase tracking-widest ml-2">TL</span></div>
+                  <div className="text-6xl font-black mb-10">{item?.price || 0} <span className="text-lg text-gray-500 uppercase tracking-widest ml-2">TL</span></div>
                   <div className="w-full space-y-4">
                     <div className="flex justify-between text-[10px] font-black uppercase"><span className="text-gray-500">Drop Probability</span><span className={calculateProbability(item) > 60 ? "text-emerald-400" : "text-rose-500"}>{calculateProbability(item)}%</span></div>
                     <div className="h-2 w-full bg-white/10 rounded-full overflow-hidden"><div className={`h-full transition-all duration-1000 ${calculateProbability(item) > 60 ? "bg-emerald-500" : "bg-rose-500"}`} style={{ width: `${calculateProbability(item)}%` }}></div></div>
@@ -426,21 +494,58 @@ const handleScrape = async (e) => {
         )}
 
         {view === 'help' && (
-          <section className="animate-in slide-in-from-right-8 duration-700 max-w-4xl mx-auto pb-20">
-            <h2 className="text-6xl font-black uppercase italic tracking-tighter mb-12">How to <span className="text-cyan-400">Use</span></h2>
-            <div className="space-y-6">
-              <div className="bg-white/5 p-10 rounded-[40px] border border-white/10">
-                <h3 className="text-xl font-black uppercase mb-4 flex items-center gap-3"><span className="w-8 h-8 rounded-full bg-cyan-500 flex items-center justify-center text-black text-xs">01</span> Track & Analyze</h3>
-                <p className="text-gray-400 text-sm leading-relaxed mb-4">Paste a product URL from supported markets. XOX Tracker will instantly scrape the price and add it to your live analysis chart.</p>
-              </div>
-              <div className="bg-white/5 p-10 rounded-[40px] border border-white/10">
-                <h3 className="text-xl font-black uppercase mb-4 flex items-center gap-3"><span className="w-8 h-8 rounded-full bg-cyan-500 flex items-center justify-center text-black text-xs">02</span> Set Targets</h3>
-                <p className="text-gray-400 text-sm leading-relaxed">Use the <span className="text-white font-bold">Edit Target</span> button to set your desired price. The chart will update with a dashed red line.</p>
-              </div>
-            </div>
-          </section>
-        )}
+  <section className="animate-in slide-in-from-right-8 duration-700 max-w-4xl mx-auto pb-20">
+    <div className="text-center mb-16">
+      <h2 className="text-6xl font-black uppercase italic tracking-tighter mb-4">
+        Protocol <span className="text-cyan-400">Manual</span>
+      </h2>
+      <p className="text-gray-500 text-xs font-bold uppercase tracking-[0.4em]">Master the XOX Tracker Engine</p>
+    </div>
 
+    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+      <div className="bg-white/5 p-8 rounded-[40px] border border-white/10 hover:border-cyan-500/30 transition-all group">
+        <div className="w-12 h-12 rounded-2xl bg-cyan-500 flex items-center justify-center text-black font-black mb-6 shadow-[0_0_20px_rgba(34,211,238,0.4)]">01</div>
+        <h3 className="text-lg font-black uppercase mb-3 text-white">Initialize Tracking</h3>
+        <p className="text-gray-400 text-xs leading-relaxed">
+          Paste any product URL from <span className="text-orange-500 font-bold">Trendyol</span> or <span className="text-yellow-500 font-bold">Amazon</span>. 
+          Our Selenium engine bypasses bot detection to fetch real-time data directly to your dashboard.
+        </p>
+      </div>
+
+      <div className="bg-white/5 p-8 rounded-[40px] border border-white/10 hover:border-rose-500/30 transition-all group">
+        <div className="w-12 h-12 rounded-2xl bg-rose-500 flex items-center justify-center text-black font-black mb-6 shadow-[0_0_20px_rgba(244,63,94,0.4)]">02</div>
+        <h3 className="text-lg font-black uppercase mb-3 text-white">Set Price Floors</h3>
+        <p className="text-gray-400 text-xs leading-relaxed">
+          Click <span className="text-white font-bold">Edit Target</span> to set your buy-in price. 
+          The system highlights deals in <span className="text-orange-500 font-bold">ORANGE</span> and sends an alert when they hit the "Hot" threshold.
+        </p>
+      </div>
+
+     <div className="bg-white/5 p-8 rounded-[40px] border border-white/10 hover:border-blue-500/30 transition-all group">
+        <div className="w-12 h-12 rounded-2xl bg-blue-500 flex items-center justify-center text-black font-black mb-6 shadow-[0_0_20px_rgba(59,130,246,0.4)]">03</div>
+        <h3 className="text-lg font-black uppercase mb-3 text-white">Market Clash</h3>
+        <p className="text-gray-400 text-xs leading-relaxed">
+          Navigate to <span className="text-cyan-400 font-bold">Compare</span> to pit products against each other. 
+          Our algorithm calculates the "Drop Probability" based on historical volatility.
+        </p>
+      </div>
+
+      <div className="bg-white/5 p-8 rounded-[40px] border border-white/10 hover:border-emerald-500/30 transition-all group">
+        <div className="w-12 h-12 rounded-2xl bg-emerald-500 flex items-center justify-center text-black font-black mb-6 shadow-[0_0_20px_rgba(16,185,129,0.4)]">04</div>
+        <h3 className="text-lg font-black uppercase mb-3 text-white">Visual Assets</h3>
+        <p className="text-gray-400 text-xs leading-relaxed">
+          Every scan saves a screenshot in <code className="text-cyan-300">utils/static</code>. 
+          Use this visual proof to verify prices before the platform changes them again.
+        </p>
+      </div>
+    </div>
+
+    <div className="mt-12 bg-gradient-to-r from-cyan-500/10 to-transparent p-8 rounded-[40px] border border-cyan-500/20 text-center">
+      <p className="text-[10px] font-black uppercase tracking-[0.2em] text-cyan-400">System Status: Optimal</p>
+      <p className="text-gray-500 text-[9px] mt-2 italic">Running on antiX Linux Environment with FastAPI/React Hybrid Bridge</p>
+    </div>
+  </section>
+)}
         <footer className="border-t border-white/5 pt-20 pb-12 mt-20">
           <div className="grid grid-cols-1 md:grid-cols-3 gap-12 text-gray-500">
             <div>

@@ -5,7 +5,6 @@ from fastapi import FastAPI, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-
 import utils.model as models
 from utils.database import SessionLocal, engine, get_db
 from core.engine import ScraperEngine
@@ -32,7 +31,9 @@ def scrape_product(
     db: Session = Depends(get_db)
 ):
     if platform == "trendyol" and "trendyol.com" not in url:
-        raise HTTPException(status_code=400, detail="URL mismatch.")
+        raise HTTPException(status_code=400, detail="URL mismatch for Trendyol.")
+
+    clean_url = url.split('?')[0]
 
     try:
         with ScraperEngine(url) as driver:
@@ -46,38 +47,63 @@ def scrape_product(
                 clean_price = raw_price.replace('TL', '').replace(' ', '').replace('.', '').replace(',', '.')
                 final_price = float(clean_price) if clean_price else 0.0
                 
+               
                 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
                 SCREENSHOT_DIR = os.path.join(BASE_DIR, "utils", "files")
                 os.makedirs(SCREENSHOT_DIR, exist_ok=True)
+                
                 screenshot_name = f"price_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:6]}.png"
                 screenshot_path = os.path.join(SCREENSHOT_DIR, screenshot_name)
                 driver.save_screenshot(screenshot_path)
 
-                new_entry = models.PriceHistory(
-                    user_id=user_id,             
-                    product_name=result['title'],
-                    product_url=url,
-                    platform=platform.upper(),
+                product = db.query(models.Product).filter(
+                    models.Product.product_url == clean_url,
+                    models.Product.user_id == user_id
+                ).first()
+
+                if not product:
+                    product = models.Product(
+                        user_id=user_id,             
+                        product_name=result['title'],
+                        product_url=clean_url,
+                        platform=platform.upper(),
+                        initial_price=final_price,   
+                        current_price=final_price,
+                        target_price=final_price * 0.9, 
+                        last_screenshot=screenshot_name
+                    )
+                    db.add(product)
+                    db.commit()
+                    db.refresh(product)
+                else:
+                    product.current_price = final_price
+                    product.last_screenshot = screenshot_name
+                    db.commit()
+
+                new_history_point = models.PriceHistory(
+                    product_id=product.id,
                     price=final_price,
-                    initial_price=final_price,   
-                    target_price=final_price * 0.9, 
-                    screenshot_path=screenshot_path,
                     timestamp=datetime.utcnow()
                 )
-    
-                db.add(new_entry)
+                db.add(new_history_point)
                 db.commit()
-                db.refresh(new_entry)
-    
+
+             
+                history_points = db.query(models.PriceHistory).filter(
+                    models.PriceHistory.product_id == product.id
+                ).order_by(models.PriceHistory.timestamp.asc()).all()
+
                 return {
                     "status": "success",
                     "data": {
-                        "id": new_entry.id,
-                        "title": new_entry.product_name,
-                        "price": new_entry.price,
-                        "targetPrice": new_entry.target_price,
-                        "platform": new_entry.platform,
-                        "screenshot": screenshot_name
+                        "id": product.id,
+                        "title": product.product_name,
+                        "price": product.current_price,
+                        "target_price": product.target_price,
+                        "platform": product.platform,
+                        "screenshot": product.last_screenshot,
+                        "history": [hp.price for hp in history_points] if history_points else [product.current_price],
+                        "dates": [hp.timestamp.strftime("%b %d") for hp in history_points] if history_points else ["Now"]
                     }
                 }
             else:
@@ -85,30 +111,23 @@ def scrape_product(
                 
     except Exception as e:
         db.rollback()
-        raise HTTPException(status_code=500, detail=str(e))
-
+        print(f"SCRAPE ERROR: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Engine Error: {str(e)}")
 @app.get("/history")
-def get_history(
-    user_id: str = Query(...), 
-    db: Session = Depends(get_db)
-):
-  
-    history = db.query(models.PriceHistory)\
-                .filter(models.PriceHistory.user_id == user_id)\
-                .order_by(models.PriceHistory.timestamp.desc())\
-                .all()
+def get_history(user_id: str = Query(...), db: Session = Depends(get_db)):
+    products = db.query(models.Product).filter(models.Product.user_id == user_id).all()
                 
     return [
         {
-            "id": item.id,
-            "title": item.product_name,
-            "price": item.price,
-            "targetPrice": item.target_price,
-            "platform": item.platform,
-            "category": item.category,
-            "time": item.timestamp.strftime("%H:%M"),
-            "screenshot": os.path.basename(item.screenshot_path)
-        } for item in history
+            "id": p.id,
+            "title": p.product_name,
+            "price": p.current_price,
+            "target_price": p.target_price,
+            "platform": p.platform,
+            "history": [hp.price for hp in p.price_history],
+            "dates": [hp.timestamp.strftime("%b %d") for hp in p.price_history],
+            "screenshot": os.path.basename(p.last_screenshot) if p.last_screenshot else None
+        } for p in products
     ]
 
 @app.patch("/items/{item_id}/target")
