@@ -9,6 +9,7 @@ import utils.model as models
 from utils.database import SessionLocal, engine, get_db
 from core.engine import ScraperEngine
 from plugins.trendyol import TrendyolPlugin
+from utils.model import Product
 
 models.Base.metadata.create_all(bind=engine)
 app = FastAPI(title="XOX Tracker API")
@@ -114,21 +115,22 @@ def scrape_product(
         print(f"SCRAPE ERROR: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Engine Error: {str(e)}")
 @app.get("/history")
-def get_history(user_id: str = Query(...), db: Session = Depends(get_db)):
-    products = db.query(models.Product).filter(models.Product.user_id == user_id).all()
-                
-    return [
-        {
+async def get_history(user_id: str, db: Session = Depends(get_db)):
+    products = db.query(Product).filter(Product.user_id == user_id).all()
+    
+    history_data = []
+    for p in products:
+        history_data.append({
             "id": p.id,
             "title": p.product_name,
             "price": p.current_price,
             "target_price": p.target_price,
+            "screenshot": p.last_screenshot,
             "platform": p.platform,
-            "history": [hp.price for hp in p.price_history],
-            "dates": [hp.timestamp.strftime("%b %d") for hp in p.price_history],
-            "screenshot": os.path.basename(p.last_screenshot) if p.last_screenshot else None
-        } for p in products
-    ]
+            "product_url": p.product_url 
+        })
+    
+    return history_data
 
 @app.patch("/items/{item_id}/target")
 def update_target(item_id: int, target: float, db: Session = Depends(get_db)):
@@ -138,7 +140,25 @@ def update_target(item_id: int, target: float, db: Session = Depends(get_db)):
     item.target_price = target
     db.commit()
     return {"status": "success"}
+@app.delete("/products/{product_id}")
+async def delete_product(product_id: int, db: Session = Depends(get_db)):
+    try:
+        
+        item = db.query(Product).filter(Product.id == product_id).first()
+        
+        if not item:
+            raise HTTPException(status_code=404, detail="Product not found")
 
+        db.delete(item)
+        
+        db.commit()
+        
+        return {"status": "success", "message": f"Product {product_id} deleted"}
+        
+    except Exception as e:
+        db.rollback() 
+        print(f"Error deleting product: {e}")
+        return {"status": "error", "message": str(e)}
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)

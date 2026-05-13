@@ -3,29 +3,6 @@ import logo from './assets/xox-logo.png';
 import { Flame, Bell, Trash2, CheckCircle } from 'lucide-react'; 
 import xoxApi from './assets/api';
 
-const MOCK_HISTORY = [
-  { 
-    id: 1, 
-    title: "Logitech G502 Hero Mouse", 
-    price: 1450, 
-    initialPrice: 1600,
-    targetPrice: 1400, 
-    history: [1600, 1550, 1500, 1450],
-    dates: ["May 01", "May 02", "May 03", "May 04"],
-    platform: "TRENDYOL"
-  },
-  { 
-    id: 2, 
-    title: "Apple iPhone 15 Pro 256GB", 
-    price: 74999, 
-    initialPrice: 72000,
-    targetPrice: 70000,
-    history: [72000, 73500, 75000, 74999], 
-    dates: ["May 01", "May 02", "May 03", "May 04"],
-    platform: "AMAZON"
-  }
-];
-
 const PLATFORMS = [
   { id: 'trendyol', label: 'TR', color: 'bg-orange-500' },
   { id: 'amazon', label: 'AZ', color: 'bg-yellow-500' },
@@ -44,7 +21,7 @@ function App() {
   const [editingId, setEditingId] = useState(null);
   const [tempTarget, setTempTarget] = useState("");
   const [filterHot, setFilterHot] = useState(false);
-  
+  const [deletingId, setDeletingId] = useState(null);
   const [showNotifPanel, setShowNotifPanel] = useState(false);
   const [notifications, setNotifications] = useState([
     { id: 101, text: "Welcome to XOX Tracker Premium.", type: "system", time: "Now", read: false },
@@ -53,6 +30,22 @@ function App() {
 
   const [compLeft, setCompLeft] = useState(MOCK_HISTORY[0].id);
   const [compRight, setCompRight] = useState(MOCK_HISTORY[1].id);
+  
+const handleDelete = async (productId) => {
+  setHistory(prev => prev.filter(item => String(item.id) !== String(productId)));
+  
+  if (String(selectedId) === String(productId)) {
+    setSelectedId(null);
+  }
+
+  try {
+    await xoxApi.deleteProduct(productId);
+    addNotification("Entry Purged", "system");
+  } catch (err) {
+    console.error("Sync error:", err);
+    addNotification("Database Sync Error", "alert");
+  }
+};
 
  useEffect(() => {
   const loadDatabaseContent = async () => {
@@ -121,31 +114,22 @@ const handleScrape = async (e) => {
     const response = await xoxApi.scrapeProduct(url, selectedSite);
     
     if (response && response.data) {
-      await new Promise(r => setTimeout(r, 400));
-
-      const freshHistory = await xoxApi.fetchHistory();
       
-      if (freshHistory && Array.isArray(freshHistory)) {
+      const freshData = await xoxApi.fetchHistory(); 
+      
+      if (freshData) {
+        setHistory([...freshData]); 
         
-        const synchronizedData = freshHistory.map(item => ({ ...item }));
-        
-        setHistory(synchronizedData);
-
-        const justScraped = synchronizedData.find(item => 
-          item.id === response.data.id || item.title === response.data.title
-        );
-
-        if (justScraped) {
-          setSelectedId(justScraped.id);
-        }
+        const newItem = freshData.find(item => item.id === response.data.id) || freshData[0];
+        if (newItem) setSelectedId(newItem.id);
       }
-      
+
       setView('dashboard');
-      addNotification(`Analysis Synchronized`, "system");
+      addNotification("Syncing Analysis...", "system");
     }
   } catch (err) {
-    console.error("Sync Error:", err);
-    addNotification("Sync Failed", "alert");
+    console.error("Scrape Sync Error:", err);
+    addNotification("Scrape failed to sync", "alert");
   } finally {
     setLoading(false);
   }
@@ -165,8 +149,8 @@ const handleScrape = async (e) => {
 };
 const displayedHistory = Array.isArray(history) 
     ? (filterHot 
-        ? history.filter(item => (item.price - (item.target_price || 0)) <= ((item.target_price || 0) * 0.1)) 
-        : history)
+        ? [...history].reverse().filter(item => (item.price - (item.target_price || 0)) <= ((item.target_price || 0) * 0.1)) 
+        : [...history].reverse())
     : [];
 
 const active = (history && history.length > 0) 
@@ -326,7 +310,6 @@ const range = (maxPrice - minPrice) || 1;
 
 return (
   <div key={`${i}-${price}-${active.id}`} className="flex flex-col items-center gap-2 group/bar h-full justify-end relative">
-          {/* PRICE TOOLTIP (Shows on Hover) */}
           <div className="absolute -top-10 left-1/2 -translate-x-1/2 bg-white text-black text-[10px] font-black px-2 py-1 rounded-md opacity-0 group-hover/bar:opacity-100 transition-all duration-300 pointer-events-none z-50 whitespace-nowrap shadow-[0_0_20px_rgba(255,255,255,0.4)] translate-y-2 group-hover/bar:translate-y-0">
             {price} TL
           </div>
@@ -360,13 +343,20 @@ return (
             </section>
 
             <section className="lg:col-span-4 flex flex-col gap-4 h-[550px] overflow-y-auto custom-scrollbar">
-              {filterHot && <div className="px-5 py-2 bg-orange-500/10 border border-orange-500/20 rounded-2xl text-[9px] font-black text-orange-500 uppercase tracking-widest text-center animate-in slide-in-from-top-2">Showing Hot Deals Only</div>}
-              {displayedHistory.map((item) => (
-  <div 
-    key={item.id} 
-    onClick={() => setSelectedId(item.id)} 
+  {filterHot && (
+    <div className="px-5 py-2 bg-orange-500/10 border border-orange-500/20 rounded-2xl text-[9px] font-black text-orange-500 uppercase tracking-widest text-center animate-in slide-in-from-top-2">
+      Showing Hot Deals Only
+    </div>
+  )}
+
+ {displayedHistory.map((item) => (
+  <div
+    key={item.id}
+    onClick={() => setSelectedId(item.id)}
     className={`p-5 rounded-[32px] cursor-pointer transition-all border transform hover:scale-[1.01] active:scale-[0.99] ${
-      selectedId === item.id ? 'bg-white/10 border-cyan-500/40 shadow-2xl' : 'bg-[#111214] border-transparent hover:bg-white/5'
+      selectedId === item.id 
+        ? 'bg-white/10 border-cyan-500/40 shadow-2xl' 
+        : 'bg-[#111214] border-transparent hover:bg-white/5'
     }`}
   >
     <div className="flex justify-between items-center mb-2">
@@ -415,7 +405,7 @@ return (
           )}
         </div>
 
-        <div className="grid grid-cols-2 gap-2">
+        <div className="grid grid-cols-3 gap-2">
           <button 
             onClick={(e) => { 
               e.stopPropagation(); 
@@ -424,21 +414,43 @@ return (
             }} 
             className="py-3 bg-white/5 hover:bg-white/10 text-white text-[8px] font-black uppercase rounded-xl border border-white/10 transition-all"
           >
-            {editingId === item.id ? "Confirm" : "Edit Target"}
+            {editingId === item.id ? "Confirm" : "Edit"}
           </button>
           
           <button 
-            onClick={(e) => { e.stopPropagation(); window.open(item.product_url, '_blank'); }}
-            className="py-3 bg-cyan-500/10 hover:bg-cyan-500/20 text-cyan-400 text-[8px] font-black uppercase rounded-xl border border-cyan-500/20 transition-all"
+  onClick={(e) => { 
+    e.stopPropagation(); 
+    
+    const actualUrl = item.product_url || item.url; 
+
+    if (actualUrl) {
+      const finalUrl = actualUrl.startsWith('http') ? actualUrl : `https://${actualUrl}`;
+      window.open(finalUrl, '_blank', 'noopener,noreferrer');
+    } else {
+      console.log("Available keys in this item:", Object.keys(item));
+      addNotification("Link data missing from server", "alert");
+    }
+  }}
+  className="py-3 bg-cyan-500/10 hover:bg-cyan-500/20 text-cyan-400 text-[8px] font-black uppercase rounded-xl border border-cyan-500/20 transition-all flex items-center justify-center gap-1"
+>
+  Link
+</button>
+
+          <button 
+            onClick={(e) => { 
+              e.stopPropagation(); 
+              setDeletingId(item.id); 
+            }}
+            className="py-3 bg-rose-500/10 hover:bg-rose-500/20 text-rose-500 text-[8px] font-black uppercase rounded-xl border border-rose-500/20 transition-all"
           >
-            Open Link
+            Delete
           </button>
         </div>
       </div>
     )}
   </div>
 ))}
-            </section>
+</section>
           </div>
         )}
 
@@ -561,7 +573,44 @@ return (
               <p className="text-[10px] font-bold italic uppercase">"Data Driven Intelligence"</p>
             </div>
           </div>
+
         </footer>
+{deletingId && (
+  <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 animate-in fade-in duration-300">
+    <div className="absolute inset-0 bg-black/80 backdrop-blur-md" onClick={() => setDeletingId(null)} />
+    
+    <div className="relative bg-[#0d0e10] border border-rose-500/30 p-8 rounded-[40px] max-w-sm w-full shadow-[0_0_80px_-20px_rgba(244,63,94,0.4)] animate-in zoom-in-95 duration-300">
+      <div className="w-20 h-20 bg-rose-500/20 rounded-full flex items-center justify-center mb-6 mx-auto border border-rose-500/20">
+        <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="#f43f5e" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M3 6h18m-2 0v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6m3 0V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"></path>
+        </svg>
+      </div>
+      
+      <h3 className="text-2xl font-black text-white text-center mb-2 uppercase tracking-tight">Purge Item?</h3>
+      <p className="text-gray-500 text-center text-[10px] font-bold uppercase tracking-widest mb-8 leading-relaxed">
+        This action is permanent and will wipe all price history records.
+      </p>
+      
+      <div className="grid grid-cols-2 gap-4">
+        <button 
+          onClick={() => setDeletingId(null)}
+          className="py-4 bg-white/5 hover:bg-white/10 text-white text-[10px] font-black uppercase rounded-2xl border border-white/10 transition-all"
+        >
+          Cancel
+        </button>
+        <button 
+          onClick={() => {
+            handleDelete(deletingId);
+            setDeletingId(null);
+          }}
+          className="py-4 bg-rose-500 text-white text-[10px] font-black uppercase rounded-2xl shadow-xl shadow-rose-500/30 hover:bg-rose-600 transition-all"
+        >
+          Confirm
+        </button>
+      </div>
+    </div>
+  </div>
+)}
       </main>
     </div>
   );

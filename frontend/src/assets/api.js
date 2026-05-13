@@ -42,6 +42,21 @@ const xoxApi = {
             throw error;
         }
     },
+    
+   deleteProduct: async (productId) => {
+    // Adding ?t= ensures the browser sees a unique URL and skips the cache
+    const response = await fetch(`http://localhost:8000/products/${productId}?t=${Date.now()}`, {
+        method: 'DELETE', 
+        headers: { 
+            'Content-Type': 'application/json',
+            'Pragma': 'no-cache',
+            'Cache-Control': 'no-cache'
+        },
+    });
+    
+    if (!response.ok) throw new Error('Failed to delete');
+    return response.json();
+},
 
     updateTarget: async (itemId, newTarget) => {
         try {
