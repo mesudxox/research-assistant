@@ -31,4 +31,4 @@ RUN mkdir -p /app/screenshots
 EXPOSE 10000
 
 # Step 8: Fire up the FastAPI production app using Uvicorn
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "10000"]
+CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "10000"]
