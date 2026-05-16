@@ -10,6 +10,9 @@ from utils.database import SessionLocal, engine, get_db
 from core.engine import ScraperEngine
 from plugins.trendyol import TrendyolPlugin
 from utils.model import Product
+from apscheduler.schedulers.background import BackgroundScheduler
+import time
+import random
 
 models.Base.metadata.create_all(bind=engine)
 app = FastAPI(title="XOX Tracker API")
@@ -23,6 +26,41 @@ app.add_middleware(
 )
 
 app.mount("/static", StaticFiles(directory="utils/files"), name="static")
+
+def auto_check_prices():
+    """Background task to update prices every 6 hours"""
+    db = SessionLocal()
+    try:
+        products = db.query(models.Product).all()
+        print(f"--- [Auto-Scrape] Starting sync for {len(products)} items ---")
+        for product in products:
+            try:
+                with ScraperEngine(product.product_url) as driver:
+                    plugin = TrendyolPlugin(driver) 
+                    result = plugin.scrape()
+                    if result.get("status") == "success":
+                        raw_price = str(result.get('price', '0'))
+                        clean_price = raw_price.replace('TL', '').replace(' ', '').replace('.', '').replace(',', '.')
+                        final_price = float(clean_price)
+                        
+                        product.current_price = final_price
+                        
+                        new_point = models.PriceHistory(product_id=product.id, price=final_price)
+                        db.add(new_point)
+                        
+                        if final_price <= product.target_price:
+                            print(f"NOTIFICATION: {product.product_name} hit target!")
+                
+                db.commit()
+                time.sleep(random.uniform(5, 10)) 
+            except Exception as e:
+                print(f"Failed to auto-scrape {product.id}: {e}")
+    finally:
+        db.close()
+
+scheduler = BackgroundScheduler()
+scheduler.add_job(func=auto_check_prices, trigger="interval", hours=6)
+scheduler.start()
 
 @app.post("/scrape/{platform}")
 def scrape_product(
@@ -134,7 +172,7 @@ async def get_history(user_id: str, db: Session = Depends(get_db)):
 
 @app.patch("/items/{item_id}/target")
 def update_target(item_id: int, target: float, db: Session = Depends(get_db)):
-    item = db.query(models.PriceHistory).filter(models.PriceHistory.id == item_id).first()
+    item = db.query(models.Product).filter(models.Product.id == item_id).first()
     if not item:
         raise HTTPException(status_code=404, detail="Item not found")
     item.target_price = target
