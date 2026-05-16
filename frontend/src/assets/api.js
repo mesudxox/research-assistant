@@ -1,4 +1,4 @@
-const BASE_URL = "http://localhost:8000";
+const BASE_URL = "https://research-assistant-2qu2.onrender.com";
 
 export const getSystemId = () => {
     let id = localStorage.getItem('xox_user_id');
@@ -44,7 +44,6 @@ const xoxApi = {
     },
     
    deleteProduct: async (productId) => {
-    // Adding ?t= ensures the browser sees a unique URL and skips the cache
     const response = await fetch(`http://localhost:8000/products/${productId}?t=${Date.now()}`, {
         method: 'DELETE', 
         headers: { 
