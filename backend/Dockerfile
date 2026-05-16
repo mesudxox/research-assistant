@@ -1,7 +1,7 @@
 # Step 1: Use an official light version of Python
 FROM python:3.10-slim
 
-# Step 2: Install system dependencies, Google Chrome, and clean up cache to save space
+# Step 2: Install updated system dependencies, Google Chrome, and clean up cache
 RUN apt-get update && apt-get install -y \
     wget \
     gnupg \
@@ -9,7 +9,6 @@ RUN apt-get update && apt-get install -y \
     curl \
     libglib2.0-0 \
     libnss3 \
-    libgconf-2-4 \
     libfontconfig1 \
     chromium \
     chromium-driver \
@@ -31,4 +30,5 @@ RUN mkdir -p /app/screenshots
 # Step 7: Expose Render's default communication port
 EXPOSE 10000
 
+# Step 8: Fire up the FastAPI production app using Uvicorn
 CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "10000"]
